@@ -64,11 +64,19 @@ class ThreadsDownloader4chan:
                     self.pre_download_list.append([thread_name, temp_img_f_name[0], temp_img_f_name[1]])
         self.history_handler.dump(self.history_urls)
 
+    @property
+    def url_catalog2thread(self):
+        if self.base_url[-1] != '/':
+            url = self.base_url + '/'
+        else:
+            url = self.base_url
+        return url.replace('catalog', 'thread')
+
     def get_all_thread(self, base_url):
         r = self.request_get_with_retry(base_url)
         data = json.loads(re.findall(r"var catalog =(.*?);var style_group =", r.text)[0])
         threads_url = list(data['threads'].keys())
-        self.threads_url = ['https://boards.4chan.org/wg/thread/'+i for i in threads_url]
+        self.threads_url = [self.url_catalog2thread+i for i in threads_url]
         self.threads_url = self.threads_url[:self.threads_num]
 
     def parse_thread_get_img_url(self, thread_url):
@@ -76,8 +84,8 @@ class ThreadsDownloader4chan:
             r = self.request_get_with_retry(thread_url)
             thread_name = (
                 re.findall(r'<title>(.*?)</title>', r.text)[0]
+                .replace('|', '').replace('?', '').replace('*', '').replace('#', '').replace('\\', '')
                 .replace('<', '').replace('>', '').replace(':', '').replace('“', '').replace('/', '')
-                .replace('|', '').replace('?', '').replace('*', '').replace('\\', '')
                 .split('-')[1].strip()
             )
             print(self.get_process(), 'Parsed thread:', thread_name)
