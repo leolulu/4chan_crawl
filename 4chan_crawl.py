@@ -113,8 +113,9 @@ class ThreadsDownloader4chan:
             print(self.get_process(), 'Downloading:', items)
             thread_name, img, f_name = items
             download_folder = os.path.join(self.download_folder, thread_name)
-            if not os.path.exists(download_folder):
-                os.makedirs(download_folder)
+            with self.lock:
+                if not os.path.exists(download_folder):
+                    os.makedirs(download_folder)
             content = self.request_get_with_retry(img).content
             with open(os.path.join(download_folder, f_name), 'wb') as f:
                 f.write(content)
@@ -123,5 +124,5 @@ class ThreadsDownloader4chan:
 
 
 if __name__ == "__main__":
-    four = ThreadsDownloader4chan('https://boards.4chan.org/wg/catalog', 20)
+    four = ThreadsDownloader4chan('https://boards.4chan.org/gif/catalog', 20)
     four.run()
