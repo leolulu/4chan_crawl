@@ -1,14 +1,17 @@
-from typing import Counter
+import json
+import os
+import re
+import threading
+import traceback
+from concurrent.futures import ThreadPoolExecutor
+from time import sleep
+from typing import Counter, Optional
+
 import requests
 from lxml import etree
-import os
-from concurrent.futures import ThreadPoolExecutor
 from retrying import retry
-import threading
-import re
+
 from pickle_handler import PickleHandler
-import traceback
-import json
 
 
 class ThreadsDownloader4chan:
@@ -21,9 +24,10 @@ class ThreadsDownloader4chan:
         'https': 'socks5://127.0.0.1:10808'
     }
 
-    def __init__(self, base_url: str, threads_num: int) -> None:
+    def __init__(self, base_url: str, threads_num: Optional[int]=999, target_formats: Optional[str]=None) -> None:
         self.base_url = base_url
         self.threads_num = threads_num
+        self.target_formats = target_formats.split(',') if target_formats else target_formats
         self.pre_download_dict = dict()
         self.history_handler = PickleHandler('wallpaper.history')
         self.history_urls = self.history_handler.load()
@@ -55,6 +59,8 @@ class ThreadsDownloader4chan:
             temp_imgs_f_name = []
             for img_f_name in imgs_f_name:
                 if img_f_name[0] in self.history_urls:
+                    continue
+                elif (self.target_formats and img_f_name[0].lower().split('.')[-1] not in self.target_formats):
                     continue
                 else:
                     temp_imgs_f_name.append(img_f_name)
@@ -124,5 +130,7 @@ class ThreadsDownloader4chan:
 
 
 if __name__ == "__main__":
-    four = ThreadsDownloader4chan('https://boards.4chan.org/gif/catalog', 20)
-    four.run()
+    for _ in range(48):
+        four = ThreadsDownloader4chan('https://boards.4chan.org/gif/catalog', target_formats='gif')
+        four.run()
+        sleep(3600)
