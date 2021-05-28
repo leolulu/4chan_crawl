@@ -24,7 +24,7 @@ class ThreadsDownloader4chan:
         'https': 'socks5://127.0.0.1:10808'
     }
 
-    def __init__(self, base_url: str, threads_num: Optional[int]=999, target_formats: Optional[str]=None) -> None:
+    def __init__(self, base_url: str, threads_num: Optional[int] = 999, target_formats: Optional[str] = None) -> None:
         self.base_url = base_url
         self.threads_num = threads_num
         self.target_formats = target_formats.split(',') if target_formats else target_formats
@@ -105,14 +105,17 @@ class ThreadsDownloader4chan:
             print(traceback.format_exc())
 
     def run(self):
-        self.get_all_thread(self.base_url)
-        self.set_total(len(self.threads_url))
-        with ThreadPoolExecutor(8) as executor:
-            executor.map(self.parse_thread_get_img_url, self.threads_url)
-        self.history_filter()
-        self.set_total(len(self.pre_download_list))
-        with ThreadPoolExecutor(16) as executor:
-            executor.map(self.downloader, self.pre_download_list)
+        try:
+            self.get_all_thread(self.base_url)
+            self.set_total(len(self.threads_url))
+            with ThreadPoolExecutor(8) as executor:
+                executor.map(self.parse_thread_get_img_url, self.threads_url)
+            self.history_filter()
+            self.set_total(len(self.pre_download_list))
+            with ThreadPoolExecutor(16) as executor:
+                executor.map(self.downloader, self.pre_download_list)
+        except Exception as e:
+            print(e)
 
     def downloader(self, items):
         try:
@@ -130,7 +133,31 @@ class ThreadsDownloader4chan:
 
 
 if __name__ == "__main__":
-    for _ in range(48):
+    for _ in range(1):
+        four = ThreadsDownloader4chan('https://boards.4chan.org/hr/catalog', target_formats='gif')
+        four.run()
         four = ThreadsDownloader4chan('https://boards.4chan.org/gif/catalog', target_formats='gif')
         four.run()
-        sleep(3600)
+        four = ThreadsDownloader4chan('https://boards.4chan.org/aco/catalog', target_formats='gif')
+        four.run()
+        four = ThreadsDownloader4chan('https://boards.4chan.org/r/catalog', target_formats='gif')
+        four.run()
+        four = ThreadsDownloader4chan('https://boards.4chan.org/b/catalog', target_formats='gif')
+        four.run()
+        four = ThreadsDownloader4chan('https://boards.4chan.org/soc/catalog', target_formats='gif')
+        four.run()
+        four = ThreadsDownloader4chan('https://boards.4chan.org/s/catalog', target_formats='gif')
+        four.run()
+        four = ThreadsDownloader4chan('https://boards.4chan.org/hc/catalog', target_formats='gif')
+        four.run()
+        four = ThreadsDownloader4chan('https://boards.4chan.org/h/catalog', target_formats='gif')
+        four.run()
+        four = ThreadsDownloader4chan('https://boards.4chan.org/e/catalog', target_formats='gif')
+        four.run()
+        four = ThreadsDownloader4chan('https://boards.4chan.org/u/catalog', target_formats='gif')
+        four.run()
+        four = ThreadsDownloader4chan('https://boards.4chan.org/d/catalog', target_formats='gif')
+        four.run()
+        four = ThreadsDownloader4chan('https://boards.4chan.org/t/catalog', target_formats='gif')
+        four.run()
+        # sleep(3600)
