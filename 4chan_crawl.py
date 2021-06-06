@@ -133,7 +133,7 @@ class ThreadsDownloader4chan:
 
 
 if __name__ == "__main__":
-    for _ in range(1):
+    for _ in range(128):
         four = ThreadsDownloader4chan('https://boards.4chan.org/hr/catalog', target_formats='gif')
         four.run()
         four = ThreadsDownloader4chan('https://boards.4chan.org/gif/catalog', target_formats='gif')
@@ -160,4 +160,4 @@ if __name__ == "__main__":
         four.run()
         four = ThreadsDownloader4chan('https://boards.4chan.org/t/catalog', target_formats='gif')
         four.run()
-        # sleep(3600)
+        sleep(7200)
