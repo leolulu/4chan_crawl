@@ -26,6 +26,7 @@ class ThreadsDownloader4chan:
 
     def __init__(self, base_url: str, threads_num: Optional[int] = 999, target_formats: Optional[str] = None) -> None:
         self.base_url = base_url
+        self.board = base_url.split('/')[-2]
         self.threads_num = threads_num
         self.target_formats = target_formats.split(',') if target_formats else target_formats
         self.pre_download_dict = dict()
@@ -113,15 +114,15 @@ class ThreadsDownloader4chan:
             self.history_filter()
             self.set_total(len(self.pre_download_list))
             with ThreadPoolExecutor(16) as executor:
-                executor.map(self.downloader, self.pre_download_list)
+                executor.map(self.downloader, self.pre_download_list, self.board)
         except Exception as e:
             print(e)
 
-    def downloader(self, items):
+    def downloader(self, items, board):
         try:
             print(self.get_process(), 'Downloading:', items)
             thread_name, img, f_name = items
-            download_folder = os.path.join(self.download_folder, thread_name)
+            download_folder = os.path.join(self.download_folder, board, thread_name)
             with self.lock:
                 if not os.path.exists(download_folder):
                     os.makedirs(download_folder)
