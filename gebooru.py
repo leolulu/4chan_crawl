@@ -44,7 +44,8 @@ def gebooru_downloader(page_range, download_folder, history_urls, history_handle
                     file_name = video_url.split('/')[-1]
                     with open(os.path.join(download_folder, file_name), 'wb') as f:
                         try:
-                            f.write(requests.get(video_url, headers=headers, proxies=proxies).content)
+                            data = requests.get(video_url, headers=headers, proxies=proxies).content
+                            f.write(data)
                         except Exception as e:
                             print("video_url error", e)
                             continue
