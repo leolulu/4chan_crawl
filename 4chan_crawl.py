@@ -2,6 +2,7 @@ import json
 import os
 import re
 import threading
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from time import sleep
@@ -11,6 +12,7 @@ import requests
 from lxml import etree
 from retrying import retry
 
+from gebooru import gebooru_downloader
 from pickle_handler import PickleHandler
 
 
@@ -33,6 +35,8 @@ class ThreadsDownloader4chan:
         self.history_handler = PickleHandler('wallpaper.history')
         self.history_urls = self.history_handler.load()
         self.download_folder = './4chan_thread_download_folder'
+        if not os.path.exists(self.download_folder):
+            os.makedirs(self.download_folder)
         self.lock = threading.Lock()
 
     def set_total(self, n):
@@ -132,33 +136,48 @@ class ThreadsDownloader4chan:
         except:
             print(traceback.format_exc())
 
+    def gebooru_run(self):
+        gebooru_page_his_handler = PickleHandler('gebooru.page.history')
+        try:
+            page_range = gebooru_page_his_handler.load().pop() + 1
+        except Exception as e:
+            print("get page_range Error:", e)
+            page_range = 1
+        # page_range = int(time.time()/3600)-451597
+        print("gebooru page_range:", page_range)
+        gebooru_downloader(page_range, self.download_folder, self.history_urls, self.history_handler)
+        gebooru_page_his_handler.dump({page_range})
+        print("gebooru done ....")
+
 
 if __name__ == "__main__":
-    for _ in range(128):
-        four = ThreadsDownloader4chan('https://boards.4chan.org/hr/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/gif/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/aco/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/r/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/b/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/soc/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/s/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/hc/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/h/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/e/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/u/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/d/catalog', target_formats='gif')
-        four.run()
-        four = ThreadsDownloader4chan('https://boards.4chan.org/t/catalog', target_formats='gif')
-        four.run()
-        sleep(7200)
+    for _ in range(12800):
+        four = ThreadsDownloader4chan('https://boards.4chan.org/hr/gebooru')
+        four.gebooru_run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/hr/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/gif/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/aco/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/r/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/b/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/soc/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/s/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/hc/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/h/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/e/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/u/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/d/catalog', target_formats='gif')
+        # four.run()
+        # four = ThreadsDownloader4chan('https://boards.4chan.org/t/catalog', target_formats='gif')
+        # four.run()
+        sleep(3600)
