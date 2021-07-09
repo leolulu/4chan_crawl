@@ -153,7 +153,6 @@ class ThreadsDownloader4chan:
 if __name__ == "__main__":
     if_4chan = False
     if_gebooru = True
-    non_stop_run = True
     for _ in range(12800):
         if if_4chan:
             four = ThreadsDownloader4chan('https://boards.4chan.org/hr/catalog', target_formats='gif')
@@ -185,5 +184,4 @@ if __name__ == "__main__":
         if if_gebooru:
             four = ThreadsDownloader4chan('https://boards.4chan.org/hr/gebooru')
             four.gebooru_run()
-        if not non_stop_run:
-            sleep(3600*3)
+        sleep(3600*2*0)

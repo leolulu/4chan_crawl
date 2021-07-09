@@ -42,12 +42,12 @@ def gebooru_downloader(page_range, download_folder, history_urls, history_handle
                 else:
                     print('downloading: ', page_range-page_num, 42-idx, video_url)
                     file_name = video_url.split('/')[-1]
+                    try:
+                        data = requests.get(video_url, headers=headers, proxies=proxies).content
+                    except Exception as e:
+                        print("video_url error", e)
+                        continue
                     with open(os.path.join(download_folder, file_name), 'wb') as f:
-                        try:
-                            data = requests.get(video_url, headers=headers, proxies=proxies).content
-                            f.write(data)
-                        except Exception as e:
-                            print("video_url error", e)
-                            continue
+                        f.write(data)
                     history_urls.add(video_url)
                     history_handler.dump(history_urls)
