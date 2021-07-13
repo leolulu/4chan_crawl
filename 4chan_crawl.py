@@ -184,4 +184,4 @@ if __name__ == "__main__":
         if if_gebooru:
             four = ThreadsDownloader4chan('https://boards.4chan.org/hr/gebooru')
             four.gebooru_run()
-        sleep(3600*2*0)
+        sleep(3600*2)
