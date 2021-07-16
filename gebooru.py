@@ -2,6 +2,7 @@ import os
 
 import requests
 from lxml import etree
+import subprocess
 
 
 def gebooru_downloader(page_range, download_folder, history_urls, history_handler):
@@ -21,10 +22,11 @@ def gebooru_downloader(page_range, download_folder, history_urls, history_handle
     for page_num in range(page_range):
         try:
             r_page = requests.get(base_url.format(page_num*42), headers=headers, proxies=proxies)
+            html = etree.HTML(r_page.content)
+            item_urls = html.xpath("//div[@class='thumbnail-container']/article[@class='thumbnail-preview']//a/@href")
         except Exception as e:
             print("r_page error", e)
-        html = etree.HTML(r_page.content)
-        item_urls = html.xpath("//div[@class='thumbnail-container']/article[@class='thumbnail-preview']//a/@href")
+            item_urls = []
         for idx, item_url in enumerate(item_urls):
             if item_url in history_urls:
                 continue
@@ -49,5 +51,14 @@ def gebooru_downloader(page_range, download_folder, history_urls, history_handle
                         continue
                     with open(os.path.join(download_folder, file_name), 'wb') as f:
                         f.write(data)
+                    if os.path.splitext(file_name)[-1] == '.gif':
+                        subprocess.call(
+                            'ffmpeg -i "{}" -f webm "{}.webm"'.format(
+                                os.path.join(download_folder, file_name),
+                                os.path.join(download_folder, os.path.splitext(file_name)[0])
+                            ),
+                            shell=True
+                        )
+                        os.remove(os.path.join(download_folder, file_name))
                     history_urls.add(video_url)
                     history_handler.dump(history_urls)
