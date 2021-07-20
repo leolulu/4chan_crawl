@@ -136,7 +136,7 @@ class ThreadsDownloader4chan:
         except:
             print(traceback.format_exc())
 
-    def gebooru_run(self):
+    def gebooru_run(self, if_gebooru_record_page_range):
         gebooru_page_his_handler = PickleHandler('gebooru.page.history')
         try:
             page_range = gebooru_page_his_handler.load().pop() + 1
@@ -144,15 +144,19 @@ class ThreadsDownloader4chan:
             print("get page_range Error:", e)
             page_range = 1
         # page_range = int(time.time()/3600)-451597
+        if not if_gebooru_record_page_range:
+            page_range = 10
         print("gebooru page_range:", page_range)
         gebooru_downloader(page_range, self.download_folder, self.history_urls, self.history_handler)
-        gebooru_page_his_handler.dump({page_range})
+        if if_gebooru_record_page_range:
+            gebooru_page_his_handler.dump({page_range})
         print("gebooru done ....")
 
 
 if __name__ == "__main__":
-    if_4chan = False
+    if_4chan = True
     if_gebooru = True
+    if_gebooru_record_page_range = False
     for _ in range(12800):
         if if_4chan:
             four = ThreadsDownloader4chan('https://boards.4chan.org/hr/catalog', target_formats='gif')
@@ -183,5 +187,5 @@ if __name__ == "__main__":
             four.run()
         if if_gebooru:
             four = ThreadsDownloader4chan('https://boards.4chan.org/hr/gebooru')
-            four.gebooru_run()
+            four.gebooru_run(if_gebooru_record_page_range)
         sleep(3600*2)
