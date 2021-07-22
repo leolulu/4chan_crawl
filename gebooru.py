@@ -51,7 +51,7 @@ def gebooru_downloader(page_range, download_folder, history_urls, history_handle
                         continue
                     with open(os.path.join(download_folder, file_name), 'wb') as f:
                         f.write(data)
-                    if os.path.splitext(file_name)[-1] == '.gif':
+                    if os.path.splitext(file_name)[-1] in ['.xxx']:
                         subprocess.call(
                             'ffmpeg -i "{}" -f webm "{}.webm"'.format(
                                 os.path.join(download_folder, file_name),
