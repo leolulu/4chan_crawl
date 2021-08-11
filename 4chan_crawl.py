@@ -188,4 +188,4 @@ if __name__ == "__main__":
         if if_gebooru:
             four = ThreadsDownloader4chan('https://boards.4chan.org/hr/gebooru')
             four.gebooru_run(if_gebooru_record_page_range)
-        sleep(3600*4)
+        sleep(3600*6)
