@@ -145,7 +145,7 @@ class ThreadsDownloader4chan:
             page_range = 1
         # page_range = int(time.time()/3600)-451597
         if not if_gebooru_record_page_range:
-            page_range = 10
+            page_range = 100
         print("gebooru page_range:", page_range)
         gebooru_downloader(page_range, self.download_folder, self.history_urls, self.history_handler)
         if if_gebooru_record_page_range:
@@ -155,7 +155,7 @@ class ThreadsDownloader4chan:
 
 if __name__ == "__main__":
     if_4chan = True
-    if_gebooru = True
+    if_gebooru = False
     if_gebooru_record_page_range = False
     for _ in range(12800):
         if if_4chan:
@@ -188,4 +188,4 @@ if __name__ == "__main__":
         if if_gebooru:
             four = ThreadsDownloader4chan('https://boards.4chan.org/hr/gebooru')
             four.gebooru_run(if_gebooru_record_page_range)
-        sleep(3600*6)
+        sleep(3600*10)
