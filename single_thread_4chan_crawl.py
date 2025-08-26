@@ -12,6 +12,7 @@ from retrying import retry
 
 
 class SingleThreadDownloader4chan:
+    COUNTER = 0
     HEADER = {
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.92 Safari/537.36",
         "cookie": "__cfduid=d903e3abeaca2effe91e7b839a96be7211527491373; _ga=GA1.3.1213173136.1527491373; _ga=GA1.2.2716196.1533521826; _gid=GA1.2.2067292582.1537358233; _gid=GA1.3.2067292582.1537358233; Hm_lvt_ba7c84ce230944c13900faeba642b2b4=1537359428,1537361149,1537362700,1537363469; Hm_lpvt_ba7c84ce230944c13900faeba642b2b4=1537363858",
@@ -27,6 +28,7 @@ class SingleThreadDownloader4chan:
         target_formats: Optional[str] = None,
         download_folder: Optional[str] = None,
     ) -> None:
+        SingleThreadDownloader4chan.COUNTER += 1
         self.thread_url = thread_url
         # 从URL中提取board名称
         self.board = self._extract_board_from_url(thread_url)
@@ -76,6 +78,7 @@ class SingleThreadDownloader4chan:
                 .strip()
             )
             print(f"解析帖子: {thread_name}")
+            thread_name = f"{SingleThreadDownloader4chan.COUNTER:02d}.{thread_name}"
 
             html = etree.HTML(r.content)
             imgs = html.xpath(".//a[@class='fileThumb']/@href")
