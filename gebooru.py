@@ -2,13 +2,14 @@ import os
 import random
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from lxml import etree
 from tqdm import tqdm
 
 
-def gebooru_downloader(page_range, download_folder, history_urls, history_handler, tags):
+def gebooru_downloader(page_range, download_folder, tags):
     headers = {
         "Cookie": "ADNF=a642803401bb64e8eda3f18ee36a7435; __utma=52483902.408065444.1446641088.1492218118.1492355795.289; _ga=GA1.2.408065444.1446641088; user_id=319612; pass_hash=f2ad63ed1614fcddb823dd9fa188feec8fc7c5e6; __cfduid=d6835714e71f517ccc437fddbf831d7191519553182; _gid=GA1.2.770386208.1537882525; resize-original=1; resize-notification=1; PHPSESSID=4qi1tkndb7ba9g142inms735p6; Hm_lvt_ba7c84ce230944c13900faeba642b2b4=1536924425,1537143399,1537882525,1537960936; gelcomPoop=1; Hm_lpvt_ba7c84ce230944c13900faeba642b2b4=1537961304",
         "Referer": "https://gelbooru.com/index.php?page=post&s=list&tags=animated&pid=84",
@@ -71,13 +72,7 @@ def gebooru_downloader(page_range, download_folder, history_urls, history_handle
             print(f"获取第 {page_num + 1} 页失败: {e}")
             continue
 
-        # 过滤掉已经在历史记录中的项目
-        new_items = []
-        for item_url in item_urls:
-            if item_url not in history_urls:
-                new_items.append(item_url)
-                history_urls.add(item_url)
-                history_handler.dump(history_urls)
+        new_items = item_urls.copy()
 
         # 如果没有新项目，跳过当前页
         if not new_items:
@@ -86,49 +81,41 @@ def gebooru_downloader(page_range, download_folder, history_urls, history_handle
         # 创建当前页面的进度条
         page_pbar = tqdm(total=len(new_items), desc=f"第 {page_num + 1} 页", unit="file")
 
-        for item_url in new_items:
+        # 创建线程池进行并发下载
+        def download_item(item_url):
             try:
                 r_item = retry_request(item_url, max_retries=5)
                 item_html = etree.HTML(r_item.content)
                 video_url = item_html.xpath("//a[text()='Original image']/@href")
-
                 if len(video_url) > 0:
                     video_url = video_url[0]
-                    if video_url in history_urls:
-                        page_pbar.update(1)
-                        continue
-                    else:
-                        file_name = video_url.split("/")[-1]
-
-                        # 无限重试下载图片
-                        while True:
-                            try:
-                                data = retry_request(video_url).content
-                                break
-                            except Exception as e:
-                                print(f"下载失败，重试中: {file_name}")
-                                time.sleep(5)
-
-                        with open(os.path.join(tags_download_folder, file_name), "wb") as f:
-                            f.write(data)
-
-                        if os.path.splitext(file_name)[-1] in [".xxx"]:
-                            subprocess.call(
-                                'ffmpeg -i "{}" -f webm "{}.webm"'.format(
-                                    os.path.join(tags_download_folder, file_name),
-                                    os.path.join(tags_download_folder, os.path.splitext(file_name)[0]),
-                                ),
-                                shell=True,
-                            )
-                            os.remove(os.path.join(tags_download_folder, file_name))
-                        history_urls.add(video_url)
-                        history_handler.dump(history_urls)
-
-                        # 更新页面进度条
-                        page_pbar.update(1)
+                    file_name = video_url.split("/")[-1]
+                    # 无限重试下载图片
+                    while True:
+                        try:
+                            data = retry_request(video_url).content
+                            break
+                        except Exception as e:
+                            print(f"下载失败，重试中: {file_name}")
+                            time.sleep(5)
+                    with open(os.path.join(tags_download_folder, file_name), "wb") as f:
+                        f.write(data)
+                    if os.path.splitext(file_name)[-1] in [".xxx"]:
+                        subprocess.call(
+                            'ffmpeg -i "{}" -f webm "{}.webm"'.format(
+                                os.path.join(tags_download_folder, file_name),
+                                os.path.join(tags_download_folder, os.path.splitext(file_name)[0]),
+                            ),
+                            shell=True,
+                        )
+                        os.remove(os.path.join(tags_download_folder, file_name))
             except Exception as e:
                 print(f"处理项目时出错: {e}")
-                continue
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(download_item, item_url) for item_url in new_items]
+            for _ in as_completed(futures):
+                page_pbar.update(1)
 
         # 关闭页面进度条
         page_pbar.close()
@@ -154,13 +141,7 @@ if __name__ == "__main__":
     if not os.path.exists(args.folder):
         os.makedirs(args.folder)
 
-    # 初始化历史记录处理器
-    history_handler = PickleHandler("wallpaper.history")
-    history_urls = history_handler.load()
-
     print(f"开始下载标签为 {args.tags} 的内容...")
-    gebooru_downloader(
-        page_range=args.pages, download_folder=args.folder, history_urls=history_urls, history_handler=history_handler, tags=args.tags
-    )
+    gebooru_downloader(page_range=args.pages, download_folder=args.folder, tags=args.tags)
 
     print("下载完成！")
