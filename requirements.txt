@@ -1,3 +1,4 @@
 requests[socks]
 lxml
 retrying
+tqdm
