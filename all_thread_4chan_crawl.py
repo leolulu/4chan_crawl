@@ -1,7 +1,9 @@
 import argparse
+import hashlib
 import json
 import os
 import re
+import sqlite3
 import time
 import traceback
 from typing import Optional
@@ -27,24 +29,22 @@ class SingleThreadDownloader4chan:
         target_formats: Optional[str] = None,
         download_folder: Optional[str] = None,
         title_keywords: Optional[list[str]] = None,
+        title_word_keywords: Optional[list[str]] = None,
     ) -> None:
         SingleThreadDownloader4chan.COUNTER += 1
         self.thread_url = thread_url
         # 从URL中提取board名称
         self.board = self._extract_board_from_url(thread_url)
-        self.target_formats = (
-            target_formats.split(",") if target_formats else target_formats
-        )
-        self.title_keywords = (
-            [keyword.casefold() for keyword in title_keywords]
-            if title_keywords
-            else None
-        )
-        self.download_folder = (
-            download_folder if download_folder else "./4chan_thread_download_folder"
-        )
+        self.thread_id = self._extract_thread_id_from_url(thread_url)
+        self.target_formats = target_formats.split(",") if target_formats else target_formats
+        self.title_keywords = [keyword.casefold() for keyword in title_keywords] if title_keywords else None
+        self.title_word_keywords = title_word_keywords if title_word_keywords else None
+        self.download_folder = download_folder if download_folder else "./4chan_thread_download_folder"
         if not os.path.exists(self.download_folder):
             os.makedirs(self.download_folder)
+        self.history_db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "download_history.sqlite3")
+        self._init_history_db()
+        print(f"[历史筛选] 初始化数据库: {self.history_db_path} (thread_id={self.thread_id})")
         self.pre_download_list = []
 
     def _extract_board_from_url(self, url: str) -> str:
@@ -56,24 +56,25 @@ class SingleThreadDownloader4chan:
         else:
             raise ValueError("无法从URL中提取board名称")
 
+    def _extract_thread_id_from_url(self, url: str) -> str:
+        match = re.search(r"https?://boards\.4chan\.org/[^/]+/thread/(\d+)", url)
+        if match:
+            return match.group(1)
+        else:
+            raise ValueError("无法从URL中提取thread id")
+
     @staticmethod
     def request_get_with_retry(
         url: str,
         headers: Optional[dict[str, str]] = None,
         proxies: Optional[dict[str, str]] = None,
     ):
-        final_headers = (
-            SingleThreadDownloader4chan.HEADER if headers is None else headers
-        )
-        final_proxies = (
-            SingleThreadDownloader4chan.PROXIES if proxies is None else proxies
-        )
+        final_headers = SingleThreadDownloader4chan.HEADER if headers is None else headers
+        final_proxies = SingleThreadDownloader4chan.PROXIES if proxies is None else proxies
         attempts = 10
         for attempt in range(1, attempts + 1):
             try:
-                response = requests.get(
-                    url, headers=final_headers, proxies=final_proxies
-                )
+                response = requests.get(url, headers=final_headers, proxies=final_proxies)
                 response.raise_for_status()
                 return response
             except requests.RequestException:
@@ -81,6 +82,211 @@ class SingleThreadDownloader4chan:
                     raise
                 time.sleep(2)
         raise RuntimeError("请求重试次数耗尽")
+
+    def _init_history_db(self):
+        conn = sqlite3.connect(self.history_db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS download_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id TEXT NOT NULL,
+                    file_name TEXT NOT NULL,
+                    file_md5 TEXT NOT NULL,
+                    image_url TEXT NOT NULL,
+                    saved_path TEXT NOT NULL,
+                    removed_by_md5 INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(thread_id, file_name)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_download_history_thread_md5
+                ON download_history(thread_id, file_md5)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS thread_folder_mapping (
+                    board TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    folder_name TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (board, thread_id)
+                )
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _get_thread_folder_mapping(self) -> Optional[str]:
+        conn = sqlite3.connect(self.history_db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT folder_name
+                FROM thread_folder_mapping
+                WHERE board = ? AND thread_id = ?
+                LIMIT 1
+                """,
+                (self.board, self.thread_id),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def _save_thread_folder_mapping(self, folder_name: str) -> None:
+        conn = sqlite3.connect(self.history_db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT 1
+                FROM thread_folder_mapping
+                WHERE board = ? AND thread_id = ?
+                LIMIT 1
+                """,
+                (self.board, self.thread_id),
+            )
+            if cursor.fetchone():
+                cursor.execute(
+                    """
+                    UPDATE thread_folder_mapping
+                    SET folder_name = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE board = ? AND thread_id = ?
+                    """,
+                    (folder_name, self.board, self.thread_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO thread_folder_mapping
+                    (board, thread_id, folder_name, created_at, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    (self.board, self.thread_id, folder_name),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _resolve_thread_folder_name(self, base_thread_name: str) -> str:
+        mapped_folder_name = self._get_thread_folder_mapping()
+        if mapped_folder_name:
+            mapped_folder_path = os.path.join(self.download_folder, self.board, mapped_folder_name)
+            if not os.path.exists(mapped_folder_path):
+                print(
+                    f"[目录映射-校验] 历史目录不存在，将重建该目录: thread_id={self.thread_id}, folder={mapped_folder_name}, path={mapped_folder_path}"
+                )
+            print(f"[目录映射-命中] 使用历史目录: thread_id={self.thread_id}, folder={mapped_folder_name}")
+            return mapped_folder_name
+        generated_folder_name = f"{SingleThreadDownloader4chan.COUNTER:02d}.{base_thread_name}"
+        self._save_thread_folder_mapping(generated_folder_name)
+        print(f"[目录映射-新建] 首次记录目录映射: thread_id={self.thread_id}, folder={generated_folder_name}")
+        return generated_folder_name
+
+    def _history_exists_by_filename(self, file_name: str) -> bool:
+        conn = sqlite3.connect(self.history_db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT 1
+                FROM download_history
+                WHERE thread_id = ? AND file_name = ?
+                LIMIT 1
+                """,
+                (self.thread_id, file_name),
+            )
+            return cursor.fetchone() is not None
+        finally:
+            conn.close()
+
+    def _history_find_by_md5(self, file_md5: str) -> Optional[str]:
+        conn = sqlite3.connect(self.history_db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT file_name
+                FROM download_history
+                WHERE thread_id = ? AND file_md5 = ?
+                LIMIT 1
+                """,
+                (self.thread_id, file_md5),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def _history_save_record(
+        self,
+        file_name: str,
+        file_md5: str,
+        image_url: str,
+        saved_path: str,
+        removed_by_md5: int,
+    ) -> None:
+        conn = sqlite3.connect(self.history_db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO download_history
+                (thread_id, file_name, file_md5, image_url, saved_path, removed_by_md5, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    self.thread_id,
+                    file_name,
+                    file_md5,
+                    image_url,
+                    saved_path,
+                    removed_by_md5,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _calculate_file_md5(file_path: str) -> str:
+        md5_hash = hashlib.md5()
+        with open(file_path, "rb") as file_obj:
+            for chunk in iter(lambda: file_obj.read(8192), b""):
+                md5_hash.update(chunk)
+        return md5_hash.hexdigest()
+
+    @staticmethod
+    def _match_word_boundary_keyword(title_text: str, keyword: str) -> bool:
+        return (
+            re.search(
+                rf"(?<!\w){re.escape(keyword)}(?!\w)",
+                title_text,
+                flags=re.IGNORECASE,
+            )
+            is not None
+        )
+
+    def _title_matches_filters(self, title_text: str) -> bool:
+        contains_match = False
+        word_boundary_match = False
+        if self.title_keywords:
+            folded_title = title_text.casefold()
+            contains_match = any(keyword in folded_title for keyword in self.title_keywords)
+        if self.title_word_keywords:
+            word_boundary_match = any(self._match_word_boundary_keyword(title_text, keyword) for keyword in self.title_word_keywords)
+        if self.title_keywords is None and self.title_word_keywords is None:
+            return True
+        return contains_match or word_boundary_match
 
     def parse_thread_get_img_url(self):
         """解析单个thread获取图片URL"""
@@ -101,13 +307,12 @@ class SingleThreadDownloader4chan:
                 .split("-")[1]
                 .strip()
             )
-            if self.title_keywords and not any(
-                keyword in thread_name.casefold() for keyword in self.title_keywords
-            ):
+            if not self._title_matches_filters(thread_name):
                 print(f"跳过帖子(标题不匹配): {thread_name}")
                 return
             print(f"解析帖子: {thread_name}")
-            thread_name = f"{SingleThreadDownloader4chan.COUNTER:02d}.{thread_name}"
+            thread_name = self._resolve_thread_folder_name(thread_name)
+            print(f"[目录路由] 最终下载目录: thread_id={self.thread_id}, folder={thread_name}")
 
             html = etree.HTML(r.content)
             imgs = html.xpath(".//a[@class='fileThumb']/@href")
@@ -127,9 +332,7 @@ class SingleThreadDownloader4chan:
             for idx, img_f_name in enumerate(imgs_f_name, start=1):
                 # 直接在原始文件名前添加序号前缀，格式为001.original_filename
                 numbered_filename = f"{idx:03d}.{img_f_name[1]}"
-                self.pre_download_list.append(
-                    [thread_name, img_f_name[0], numbered_filename]
-                )
+                self.pre_download_list.append([thread_name, img_f_name[0], numbered_filename])
 
         except Exception as e:
             print(f"解析帖子时出错: {e}")
@@ -139,15 +342,45 @@ class SingleThreadDownloader4chan:
         """下载单个图片"""
         try:
             thread_name, img, f_name = items
-            download_folder = os.path.join(
-                self.download_folder, self.board, thread_name
-            )
+            print(f"[前筛] 检查文件名历史: thread_id={self.thread_id}, file_name={f_name}")
+            if self._history_exists_by_filename(f_name):
+                print(f"[前筛-命中] 历史已存在，跳过下载: thread_id={self.thread_id}, file_name={f_name}")
+                return
+            print(f"[前筛-通过] 文件名未命中历史，开始下载: thread_id={self.thread_id}, file_name={f_name}")
+            download_folder = os.path.join(self.download_folder, self.board, thread_name)
             if not os.path.exists(download_folder):
                 os.makedirs(download_folder)
+            file_path = os.path.join(download_folder, f_name)
             content = self.request_get_with_retry(img).content
-            with open(os.path.join(download_folder, f_name), "wb") as f:
+            with open(file_path, "wb") as f:
                 f.write(content)
-            print(f"已下载: {f_name}")
+            print(f"[下载] 下载完成: thread_id={self.thread_id}, file_name={f_name}, path={file_path}")
+            print(f"[后筛] 开始MD5计算: thread_id={self.thread_id}, file_name={f_name}")
+            file_md5 = self._calculate_file_md5(file_path)
+            print(f"[后筛] MD5计算完成: thread_id={self.thread_id}, file_name={f_name}, md5={file_md5}")
+            md5_hit_file_name = self._history_find_by_md5(file_md5)
+            if md5_hit_file_name:
+                print(
+                    f"[后筛-命中] MD5已存在，判定重复内容: thread_id={self.thread_id}, file_name={f_name}, 历史文件名={md5_hit_file_name}, md5={file_md5}"
+                )
+                os.remove(file_path)
+                self._history_save_record(
+                    file_name=f_name,
+                    file_md5=file_md5,
+                    image_url=img,
+                    saved_path="",
+                    removed_by_md5=1,
+                )
+                print(f"[后筛-剔除] 已删除重复文件并记录历史: thread_id={self.thread_id}, file_name={f_name}, md5={file_md5}")
+                return
+            self._history_save_record(
+                file_name=f_name,
+                file_md5=file_md5,
+                image_url=img,
+                saved_path=file_path,
+                removed_by_md5=0,
+            )
+            print(f"[后筛-通过] MD5未命中历史，保留文件并写入历史: thread_id={self.thread_id}, file_name={f_name}, md5={file_md5}")
         except Exception as e:
             print(f"下载图片时出错: {e}")
             print(traceback.format_exc())
@@ -180,9 +413,7 @@ def fetch_catalog_threads(catalog_url: str):
         headers=SingleThreadDownloader4chan.HEADER,
         proxies=SingleThreadDownloader4chan.PROXIES,
     )
-    catalog_match = re.search(
-        r"var catalog = (\{.*?\});var style_group", response.text, re.S
-    )
+    catalog_match = re.search(r"var catalog = (\{.*?\});var style_group", response.text, re.S)
     if not catalog_match:
         raise ValueError("无法从catalog页面提取thread数据")
     catalog_data = json.loads(catalog_match.group(1))
@@ -190,9 +421,7 @@ def fetch_catalog_threads(catalog_url: str):
     threads_data = catalog_data.get("threads", {})
     threads = []
     for thread_id, thread_info in threads_data.items():
-        thread_title = (
-            thread_info.get("sub") or thread_info.get("teaser") or ""
-        ).strip()
+        thread_title = (thread_info.get("sub") or thread_info.get("teaser") or "").strip()
         thread_url = f"https://boards.4chan.org/{slug}/thread/{thread_id}"
         threads.append((thread_title, thread_url))
     return threads
@@ -212,7 +441,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--title-keyword",
         action="append",
-        required=True,
+        required=False,
         metavar="KEYWORD",
         help=(
             "按标题关键字筛选(不区分大小写)，可重复传入多个\n"
@@ -221,28 +450,55 @@ if __name__ == "__main__":
             "输入清洗: 自动去首尾空格、去重、忽略空值"
         ),
     )
+    parser.add_argument(
+        "--title-word-keyword",
+        action="append",
+        required=False,
+        metavar="KEYWORD",
+        help=(
+            "按标题单词边界筛选(不区分大小写)，可重复传入多个\n"
+            "匹配规则: 关键字必须命中单词边界(完整单词/句首/句尾)才下载\n"
+            "示例: --title-word-keyword cat --title-word-keyword milf\n"
+            "输入清洗: 自动去首尾空格、去重、忽略空值"
+        ),
+    )
     args = parser.parse_args()
     download_folder = args.download_folder
-    title_keywords = []
-    seen_keywords = set()
-    for keyword in args.title_keyword:
-        cleaned_keyword = keyword.strip()
-        if not cleaned_keyword:
-            continue
-        folded_keyword = cleaned_keyword.casefold()
-        if folded_keyword in seen_keywords:
-            continue
-        seen_keywords.add(folded_keyword)
-        title_keywords.append(cleaned_keyword)
-    if not title_keywords:
-        raise SystemExit("错误: 至少需要一个非空的 --title-keyword")
+
+    def normalize_keywords(raw_keywords: Optional[list[str]]) -> list[str]:
+        normalized_keywords = []
+        seen_keywords = set()
+        if not raw_keywords:
+            return normalized_keywords
+        for keyword in raw_keywords:
+            cleaned_keyword = keyword.strip()
+            if not cleaned_keyword:
+                continue
+            folded_keyword = cleaned_keyword.casefold()
+            if folded_keyword in seen_keywords:
+                continue
+            seen_keywords.add(folded_keyword)
+            normalized_keywords.append(cleaned_keyword)
+        return normalized_keywords
+
+    title_keywords = normalize_keywords(args.title_keyword)
+    title_word_keywords = normalize_keywords(args.title_word_keyword)
+    if not title_keywords and not title_word_keywords:
+        raise SystemExit("错误: 至少需要一个非空筛选参数: --title-keyword 或 --title-word-keyword")
     catalog_url = "https://boards.4chan.org/gif/catalog"
     all_threads = fetch_catalog_threads(catalog_url)
     matched_threads = []
     for thread_title, thread_url in all_threads:
-        if any(
-            keyword.casefold() in thread_title.casefold() for keyword in title_keywords
-        ):
+        contains_match = False
+        word_boundary_match = False
+        if title_keywords:
+            folded_title = thread_title.casefold()
+            contains_match = any(keyword.casefold() in folded_title for keyword in title_keywords)
+        if title_word_keywords:
+            word_boundary_match = any(
+                SingleThreadDownloader4chan._match_word_boundary_keyword(thread_title, keyword) for keyword in title_word_keywords
+            )
+        if contains_match or word_boundary_match:
             matched_threads.append((thread_title, thread_url))
     print(f"Catalog中共获取到 {len(all_threads)} 个Threads")
     print(f"按关键字匹配到 {len(matched_threads)} 个Threads")
@@ -253,4 +509,5 @@ if __name__ == "__main__":
             thread_url,
             download_folder=download_folder,
             title_keywords=title_keywords,
+            title_word_keywords=title_word_keywords,
         ).run()
