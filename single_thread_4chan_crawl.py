@@ -1,14 +1,13 @@
+import argparse
 import os
 import re
-import sys
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
+import lxml.etree as etree
 import requests
-from lxml import etree
-from retrying import retry
 
 
 class SingleThreadDownloader4chan:
@@ -48,15 +47,15 @@ class SingleThreadDownloader4chan:
         else:
             raise ValueError("无法从URL中提取board名称")
 
-    def request_get_with_retry(self, url, **args):
-        default_args = {
-            "headers": SingleThreadDownloader4chan.HEADER,
-            "proxies": SingleThreadDownloader4chan.PROXIES,
-        }
-        default_args.update(args)
-        # 过滤掉值为None的参数
-        default_args = {k: v for k, v in default_args.items() if v is not None}
-        return requests.get(url, **default_args)
+    def request_get_with_retry(
+        self,
+        url: str,
+        headers: Optional[dict[str, str]] = None,
+        proxies: Optional[dict[str, str]] = None,
+    ):
+        final_headers = SingleThreadDownloader4chan.HEADER if headers is None else headers
+        final_proxies = SingleThreadDownloader4chan.PROXIES if proxies is None else proxies
+        return requests.get(url, headers=final_headers, proxies=final_proxies)
 
     def parse_thread_get_img_url(self):
         """解析单个thread获取图片URL"""
@@ -143,11 +142,15 @@ class SingleThreadDownloader4chan:
 
 
 if __name__ == "__main__":
-    # 从命令行参数获取可选的下载文件夹
-    if len(sys.argv) == 2:
-        download_folder = sys.argv[1]
-    else:
-        download_folder = None
+    parser = argparse.ArgumentParser(description="4chan 单帖图片下载器")
+    parser.add_argument(
+        "download_folder",
+        nargs="?",
+        default=None,
+        help="可选下载目录，默认使用 ./4chan_thread_download_folder",
+    )
+    args = parser.parse_args()
+    download_folder = args.download_folder
 
     exe = ThreadPoolExecutor(1)
 
@@ -155,4 +158,7 @@ if __name__ == "__main__":
         thread_url = input("请输入4chan的thread URL: ").strip()
         if not thread_url:
             continue
-        exe.submit(lambda thread_url: SingleThreadDownloader4chan(thread_url, download_folder=download_folder).run(), thread_url)
+        exe.submit(
+            lambda thread_url: SingleThreadDownloader4chan(thread_url, download_folder=download_folder).run(),
+            thread_url,
+        )
