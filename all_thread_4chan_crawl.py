@@ -13,7 +13,7 @@ import requests
 
 
 class SingleThreadDownloader4chan:
-    COUNTER = 0
+    counter = 0
     HEADER = {
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.92 Safari/537.36",
         "cookie": "__cfduid=d903e3abeaca2effe91e7b839a96be7211527491373; _ga=GA1.3.1213173136.1527491373; _ga=GA1.2.2716196.1533521826; _gid=GA1.2.2067292582.1537358233; _gid=GA1.3.2067292582.1537358233; Hm_lvt_ba7c84ce230944c13900faeba642b2b4=1537359428,1537361149,1537362700,1537363469; Hm_lpvt_ba7c84ce230944c13900faeba642b2b4=1537363858",
@@ -30,8 +30,9 @@ class SingleThreadDownloader4chan:
         download_folder: Optional[str] = None,
         title_keywords: Optional[list[str]] = None,
         title_word_keywords: Optional[list[str]] = None,
+        catalog_title: Optional[str] = None,
     ) -> None:
-        SingleThreadDownloader4chan.COUNTER += 1
+        SingleThreadDownloader4chan.counter += 1
         self.thread_url = thread_url
         # 从URL中提取board名称
         self.board = self._extract_board_from_url(thread_url)
@@ -39,6 +40,7 @@ class SingleThreadDownloader4chan:
         self.target_formats = target_formats.split(",") if target_formats else target_formats
         self.title_keywords = [keyword.casefold() for keyword in title_keywords] if title_keywords else None
         self.title_word_keywords = title_word_keywords if title_word_keywords else None
+        self.catalog_title = catalog_title.strip() if catalog_title and catalog_title.strip() else None
         self.download_folder = download_folder if download_folder else "./4chan_thread_download_folder"
         if not os.path.exists(self.download_folder):
             os.makedirs(self.download_folder)
@@ -187,7 +189,7 @@ class SingleThreadDownloader4chan:
                 )
             print(f"[目录映射-命中] 使用历史目录: thread_id={self.thread_id}, folder={mapped_folder_name}")
             return mapped_folder_name
-        generated_folder_name = f"{SingleThreadDownloader4chan.COUNTER:02d}.{base_thread_name}"
+        generated_folder_name = f"{SingleThreadDownloader4chan.counter:02d}.{base_thread_name}"
         self._save_thread_folder_mapping(generated_folder_name)
         print(f"[目录映射-新建] 首次记录目录映射: thread_id={self.thread_id}, folder={generated_folder_name}")
         return generated_folder_name
@@ -276,6 +278,45 @@ class SingleThreadDownloader4chan:
             is not None
         )
 
+    def _extract_display_title_from_thread_page(self, html_root, page_text: str) -> str:
+        subject_candidates = []
+        if html_root is not None:
+            for text in html_root.xpath(".//span[@class='subject']/text()"):
+                cleaned = (text or "").strip()
+                if cleaned:
+                    subject_candidates.append(cleaned)
+        if subject_candidates:
+            return max(subject_candidates, key=len)
+
+        title_match = re.search(r"<title>(.*?)</title>", page_text, re.S)
+        if not title_match:
+            return ""
+        raw_title = title_match.group(1).strip()
+        prefix = f"/{self.board}/ - "
+        if raw_title.startswith(prefix):
+            raw_title = raw_title[len(prefix) :]
+        suffix = " - Adult GIF - 4chan"
+        if raw_title.endswith(suffix):
+            raw_title = raw_title[: -len(suffix)]
+        return raw_title.strip()
+
+    @staticmethod
+    def _sanitize_title_for_folder_name(raw_title: str) -> str:
+        return (
+            raw_title.replace("|", "")
+            .replace("?", "")
+            .replace("*", "")
+            .replace("#", "")
+            .replace("\\", "")
+            .replace("<", "")
+            .replace(">", "")
+            .replace(":", "")
+            .replace('"', "")
+            .replace("“", "")
+            .replace("/", "")
+            .strip()
+        )
+
     def _title_matches_filters(self, title_text: str) -> bool:
         contains_match = False
         word_boundary_match = False
@@ -292,29 +333,20 @@ class SingleThreadDownloader4chan:
         """解析单个thread获取图片URL"""
         try:
             r = self.request_get_with_retry(self.thread_url)
-            thread_name = (
-                re.findall(r"<title>(.*?)</title>", r.text)[0]
-                .replace("|", "")
-                .replace("?", "")
-                .replace("*", "")
-                .replace("#", "")
-                .replace("\\", "")
-                .replace("<", "")
-                .replace(">", "")
-                .replace(":", "")
-                .replace("“", "")
-                .replace("/", "")
-                .split("-")[1]
-                .strip()
-            )
-            if not self._title_matches_filters(thread_name):
-                print(f"跳过帖子(标题不匹配): {thread_name}")
-                return
-            print(f"解析帖子: {thread_name}")
-            thread_name = self._resolve_thread_folder_name(thread_name)
-            print(f"[目录路由] 最终下载目录: thread_id={self.thread_id}, folder={thread_name}")
-
             html = etree.HTML(r.content)
+            if html is None:
+                html = etree.HTML(r.text)
+            display_title = self._extract_display_title_from_thread_page(html, r.text)
+            title_for_filter = self.catalog_title or display_title
+            if not self._title_matches_filters(title_for_filter):
+                print(f"跳过帖子(标题不匹配): {display_title or title_for_filter}")
+                return
+            print(f"解析帖子: {display_title or title_for_filter}")
+            folder_base_title = self._sanitize_title_for_folder_name(display_title or title_for_filter or self.thread_id)
+            if not folder_base_title:
+                folder_base_title = self.thread_id
+            thread_name = self._resolve_thread_folder_name(folder_base_title)
+            print(f"[目录路由] 最终下载目录: thread_id={self.thread_id}, folder={thread_name}")
             imgs = html.xpath(".//a[@class='fileThumb']/@href")
             imgs = ["https:" + i for i in imgs]
             f_name = html.xpath(".//div[@class='fileText']/a/text()")
@@ -504,10 +536,11 @@ if __name__ == "__main__":
     print(f"按关键字匹配到 {len(matched_threads)} 个Threads")
     if not matched_threads:
         raise SystemExit(0)
-    for _, thread_url in matched_threads:
+    for thread_title, thread_url in matched_threads:
         SingleThreadDownloader4chan(
             thread_url,
             download_folder=download_folder,
             title_keywords=title_keywords,
             title_word_keywords=title_word_keywords,
+            catalog_title=thread_title,
         ).run()
