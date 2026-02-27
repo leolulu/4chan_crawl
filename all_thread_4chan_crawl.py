@@ -494,6 +494,24 @@ if __name__ == "__main__":
             "输入清洗: 自动去首尾空格、去重、忽略空值"
         ),
     )
+    parser.add_argument(
+        "--exclude-keyword",
+        action="append",
+        required=False,
+        metavar="KEYWORD",
+        help=(
+            "按标题关键字剔除(不区分大小写)，可重复传入多个\n"
+            "匹配规则: 命中任意一个关键字(OR)即剔除，优先级最高\n"
+            "示例: --exclude-keyword gay --exclude-keyword tranny\n"
+            "输入清洗: 自动去首尾空格、去重、忽略空值"
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        required=False,
+        help="只测试筛选逻辑，不实际下载图片",
+    )
     args = parser.parse_args()
     download_folder = args.download_folder
 
@@ -515,12 +533,20 @@ if __name__ == "__main__":
 
     title_keywords = normalize_keywords(args.title_keyword)
     title_word_keywords = normalize_keywords(args.title_word_keyword)
+    exclude_keywords = normalize_keywords(args.exclude_keyword)
     if not title_keywords and not title_word_keywords:
         raise SystemExit("错误: 至少需要一个非空筛选参数: --title-keyword 或 --title-word-keyword")
     catalog_url = "https://boards.4chan.org/gif/catalog"
     all_threads = fetch_catalog_threads(catalog_url)
     matched_threads = []
     for thread_title, thread_url in all_threads:
+        # 先检查剔除条件（优先级最高）
+        if exclude_keywords:
+            folded_title = thread_title.casefold()
+            if any(keyword.casefold() in folded_title for keyword in exclude_keywords):
+                print(f"[剔除] 标题命中排除关键字: {thread_title}")
+                continue
+
         contains_match = False
         word_boundary_match = False
         if title_keywords:
@@ -536,6 +562,25 @@ if __name__ == "__main__":
     print(f"按关键字匹配到 {len(matched_threads)} 个Threads")
     if not matched_threads:
         raise SystemExit(0)
+
+    # dry-run 模式：只显示匹配结果，不下载
+    if args.dry_run:
+        print("\n" + "=" * 60)
+        print("[DRY-RUN 模式] 仅显示筛选结果，不执行下载")
+        print("=" * 60)
+        print(f"\n筛选参数:")
+        print(f"  - 包含关键字: {title_keywords if title_keywords else '无'}")
+        print(f"  - 单词边界: {title_word_keywords if title_word_keywords else '无'}")
+        print(f"  - 排除关键字: {exclude_keywords if exclude_keywords else '无'}")
+        print(f"\n匹配到的 {len(matched_threads)} 个Threads:")
+        for i, (title, url) in enumerate(matched_threads, 1):
+            print(f"  {i}. {title}")
+            print(f"     {url}")
+        print("\n" + "=" * 60)
+        print("[DRY-RUN 完成] 以上仅为预览，未实际下载")
+        print("=" * 60)
+        raise SystemExit(0)
+
     for thread_title, thread_url in matched_threads:
         SingleThreadDownloader4chan(
             thread_url,
