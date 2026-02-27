@@ -6,6 +6,7 @@ import re
 import sqlite3
 import time
 import traceback
+from datetime import datetime
 from typing import Optional
 
 import lxml.etree as etree
@@ -14,6 +15,7 @@ import requests
 
 class SingleThreadDownloader4chan:
     counter = 0
+    THREAD_FOLDER_SEQ_NAME = "thread_folder_seq"
     HEADER = {
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.92 Safari/537.36",
         "cookie": "__cfduid=d903e3abeaca2effe91e7b839a96be7211527491373; _ga=GA1.3.1213173136.1527491373; _ga=GA1.2.2716196.1533521826; _gid=GA1.2.2067292582.1537358233; _gid=GA1.3.2067292582.1537358233; Hm_lvt_ba7c84ce230944c13900faeba642b2b4=1537359428,1537361149,1537362700,1537363469; Hm_lpvt_ba7c84ce230944c13900faeba642b2b4=1537363858",
@@ -32,11 +34,15 @@ class SingleThreadDownloader4chan:
         title_word_keywords: Optional[list[str]] = None,
         catalog_title: Optional[str] = None,
     ) -> None:
-        SingleThreadDownloader4chan.counter += 1
         self.thread_url = thread_url
         # 从URL中提取board名称
         self.board = self._extract_board_from_url(thread_url)
         self.thread_id = self._extract_thread_id_from_url(thread_url)
+        self.thread_created_ts: Optional[int] = None
+        try:
+            self.thread_created_ts = self._fetch_thread_created_ts()
+        except Exception as e:
+            print(f"[元数据] 获取thread创建时间失败，将不写入创建时间到目录名: thread_id={self.thread_id}, err={e}")
         self.target_formats = target_formats.split(",") if target_formats else target_formats
         self.title_keywords = [keyword.casefold() for keyword in title_keywords] if title_keywords else None
         self.title_word_keywords = title_word_keywords if title_word_keywords else None
@@ -48,6 +54,45 @@ class SingleThreadDownloader4chan:
         self._init_history_db()
         print(f"[历史筛选] 初始化数据库: {self.history_db_path} (thread_id={self.thread_id})")
         self.pre_download_list = []
+
+    def _fetch_thread_created_ts(self) -> Optional[int]:
+        """优先使用4chan JSON API获取thread(OP)创建时间(UNIX秒)."""
+        api_url = f"https://a.4cdn.org/{self.board}/thread/{self.thread_id}.json"
+        attempts = 10
+        last_err: Optional[Exception] = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = requests.get(
+                    api_url,
+                    headers=SingleThreadDownloader4chan.HEADER,
+                    proxies=SingleThreadDownloader4chan.PROXIES,
+                    timeout=30,
+                )
+                response.raise_for_status()
+                data = response.json()
+                posts = data.get("posts")
+                if not isinstance(posts, list) or not posts:
+                    return None
+                op = posts[0]
+                created_ts = op.get("time") if isinstance(op, dict) else None
+                return int(created_ts) if created_ts is not None else None
+            except Exception as e:
+                last_err = e
+                if attempt == attempts:
+                    raise
+                time.sleep(2)
+        if last_err is not None:
+            raise last_err
+        return None
+
+    def _format_thread_created_time_for_folder(self) -> Optional[str]:
+        if self.thread_created_ts is None:
+            return None
+        try:
+            # 使用本地时区时间，格式: 02-27_18-05 (不含年份和秒)
+            return datetime.fromtimestamp(self.thread_created_ts).strftime("%m-%d_%H-%M")
+        except Exception:
+            return None
 
     def _extract_board_from_url(self, url: str) -> str:
         """从thread URL中提取board名称"""
@@ -122,6 +167,156 @@ class SingleThreadDownloader4chan:
                 )
                 """
             )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sequence_state (
+                    name TEXT PRIMARY KEY,
+                    next_value INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sequence_allocations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    allocated_value INTEGER NOT NULL,
+                    board TEXT,
+                    thread_id TEXT,
+                    base_title TEXT,
+                    folder_name TEXT,
+                    collision INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sequence_allocations_name_value
+                ON sequence_allocations(name, allocated_value)
+                """
+            )
+            self._ensure_thread_folder_sequence_initialized(conn)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _ensure_thread_folder_sequence_initialized(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT next_value
+            FROM sequence_state
+            WHERE name = ?
+            LIMIT 1
+            """,
+            (SingleThreadDownloader4chan.THREAD_FOLDER_SEQ_NAME,),
+        )
+        row = cursor.fetchone()
+        if row is not None:
+            return
+
+        cursor.execute("SELECT folder_name FROM thread_folder_mapping")
+        max_used = 0
+        for (folder_name,) in cursor.fetchall():
+            if not isinstance(folder_name, str):
+                continue
+            match = re.match(r"^(\d+)\.", folder_name)
+            if not match:
+                continue
+            try:
+                max_used = max(max_used, int(match.group(1)))
+            except Exception:
+                continue
+        next_value = max_used + 1
+        cursor.execute(
+            """
+            INSERT INTO sequence_state(name, next_value, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            """,
+            (SingleThreadDownloader4chan.THREAD_FOLDER_SEQ_NAME, next_value),
+        )
+
+    def _allocate_thread_folder_sequence(self, base_title: str) -> tuple[int, int]:
+        conn = sqlite3.connect(self.history_db_path)
+        try:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT next_value
+                FROM sequence_state
+                WHERE name = ?
+                LIMIT 1
+                """,
+                (SingleThreadDownloader4chan.THREAD_FOLDER_SEQ_NAME,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                # 理论上不会发生：_init_history_db已初始化；此处兜底
+                cursor.execute(
+                    """
+                    INSERT INTO sequence_state(name, next_value, updated_at)
+                    VALUES (?, 2, CURRENT_TIMESTAMP)
+                    """,
+                    (SingleThreadDownloader4chan.THREAD_FOLDER_SEQ_NAME,),
+                )
+                allocated_value = 1
+            else:
+                allocated_value = int(row[0])
+                cursor.execute(
+                    """
+                    UPDATE sequence_state
+                    SET next_value = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE name = ?
+                    """,
+                    (allocated_value + 1, SingleThreadDownloader4chan.THREAD_FOLDER_SEQ_NAME),
+                )
+
+            cursor.execute(
+                """
+                INSERT INTO sequence_allocations(name, allocated_value, board, thread_id, base_title)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    SingleThreadDownloader4chan.THREAD_FOLDER_SEQ_NAME,
+                    allocated_value,
+                    self.board,
+                    self.thread_id,
+                    base_title,
+                ),
+            )
+            last_row_id = cursor.lastrowid
+            if last_row_id is None:
+                raise RuntimeError("failed to get allocation_id from sequence_allocations insert")
+            allocation_id = int(last_row_id)
+            conn.commit()
+            return allocated_value, allocation_id
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+    def _finalize_thread_folder_sequence_allocation(self, allocation_id: int, folder_name: str, collision: int) -> None:
+        conn = sqlite3.connect(self.history_db_path)
+        try:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE sequence_allocations
+                SET folder_name = ?, collision = ?
+                WHERE id = ?
+                """,
+                (folder_name, int(collision), int(allocation_id)),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -189,10 +384,26 @@ class SingleThreadDownloader4chan:
                 )
             print(f"[目录映射-命中] 使用历史目录: thread_id={self.thread_id}, folder={mapped_folder_name}")
             return mapped_folder_name
-        generated_folder_name = f"{SingleThreadDownloader4chan.counter:02d}.{base_thread_name}"
-        self._save_thread_folder_mapping(generated_folder_name)
-        print(f"[目录映射-新建] 首次记录目录映射: thread_id={self.thread_id}, folder={generated_folder_name}")
-        return generated_folder_name
+
+        allocated_value, allocation_id = self._allocate_thread_folder_sequence(base_thread_name)
+        base_folder_name = f"{allocated_value:02d}.{base_thread_name}"
+
+        # 目录名冲突处理：不更换编号，只在同号下追加后缀
+        folder_name = base_folder_name
+        collision = 0
+        candidate_index = 1
+        while True:
+            candidate_path = os.path.join(self.download_folder, self.board, folder_name)
+            if not os.path.exists(candidate_path):
+                break
+            collision = 1
+            candidate_index += 1
+            folder_name = f"{base_folder_name}~{candidate_index}"
+
+        self._save_thread_folder_mapping(folder_name)
+        self._finalize_thread_folder_sequence_allocation(allocation_id, folder_name, collision)
+        print(f"[目录映射-新建] 首次记录目录映射: thread_id={self.thread_id}, folder={folder_name}")
+        return folder_name
 
     def _history_exists_by_filename(self, file_name: str) -> bool:
         conn = sqlite3.connect(self.history_db_path)
@@ -345,6 +556,9 @@ class SingleThreadDownloader4chan:
             folder_base_title = self._sanitize_title_for_folder_name(display_title or title_for_filter or self.thread_id)
             if not folder_base_title:
                 folder_base_title = self.thread_id
+            created_time_str = self._format_thread_created_time_for_folder()
+            if created_time_str:
+                folder_base_title = f"{folder_base_title}({created_time_str})"
             thread_name = self._resolve_thread_folder_name(folder_base_title)
             print(f"[目录路由] 最终下载目录: thread_id={self.thread_id}, folder={thread_name}")
             imgs = html.xpath(".//a[@class='fileThumb']/@href")
